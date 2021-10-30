@@ -40,6 +40,10 @@ class DQN:
         assert warmup_steps > self._buffer._batch_size, (
             "You should have at least a batch in the ER.")
 
+    def act(self, state):
+        with torch.no_grad():
+            return self._estimator(state).argmax()
+
     def step(self, state):
         # implement an epsilon greedy policy using the
         # estimator and epsilon schedule attributes.
@@ -144,10 +148,12 @@ def eval(agent, env, crt_step, opt):
     episodic_returns = []
     for _ in range(opt.eval_episodes):
         obs, done = env.reset(), False
+        obs = obs.reshape(1, obs.size(0), obs.size(1), obs.size(2))
         episodic_returns.append(0)
         while not done:
             action = agent.act(obs)
             obs, reward, done, info = env.step(action)
+            obs = obs.reshape(1, obs.size(0), obs.size(1), obs.size(2))
             episodic_returns[-1] += reward
 
     _save_stats(episodic_returns, crt_step, opt.logdir)
@@ -176,10 +182,10 @@ def main(opt):
     # opt.device = torch.device("cpu")
     env = Env("train", opt)
     eval_env = Env("eval", opt)
-    agent = RandomAgent(env.action_space.n)
+    # agent = RandomAgent(env.action_space.n)
 
     net = get_estimator(env.action_space.n, opt.device)
-    dqn_agent = DQN(
+    agent = DQN(
         net,
         ReplayMemory(opt.device, size=1000, batch_size=32),
         O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
@@ -189,17 +195,23 @@ def main(opt):
         update_steps=2,
     )
 
-    train(dqn_agent, env, step_num=100000)
+    # train(dqn_agent, env, step_num=100000)
 
     # main loop
     ep_cnt, step_cnt, done = 0, 0, True
     while step_cnt < opt.steps or not done:
         if done:
             ep_cnt += 1
-            obs, done = env.reset(), False
+            state, done = env.reset().clone(), False
+            state = state.reshape(1, state.size(0), state.size(1), state.size(2))
 
-        action = agent.act(obs)
-        obs, reward, done, info = env.step(action)
+        action = agent.step(state)
+        state_, reward, done, info = env.step(action)
+        state_ = state_.reshape(1, state_.size(0), state_.size(1), state_.size(2))
+
+        agent.learn(state, action, reward, state_, done)
+
+        state = state_.clone()
 
         step_cnt += 1
 
@@ -208,50 +220,50 @@ def main(opt):
             eval(agent, eval_env, step_cnt, opt)
 
 
-def train(agent, env, step_num=100_000):
-
-    stats, N = {"step_idx": [0], "ep_rewards": [0.0], "ep_steps": [0.0]}, 0
-
-    state, done = env.reset().clone(), False
-    state = state.reshape(1, state.size(0), state.size(1), state.size(2))
-    for step in range(step_num):
-
-        action = agent.step(state)
-        state_, reward, done, _ = env.step(action)
-        state_ = state_.reshape(1, state_.size(0), state_.size(1), state_.size(2))
-        agent.learn(state, action, reward, state_, done)
-
-        # some envs just update the state and are not returning a new one
-        state = state_.clone()
-
-        # stats
-        stats["ep_rewards"][N] += reward
-        stats["ep_steps"][N] += 1
-
-        if done:
-            # episode done, reset env!
-            state, done = env.reset().clone(), False
-            state = state.reshape(1, state.size(0), state.size(1), state.size(2))
-
-            # some more stats
-            if N % 10 == 0:
-                print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
-                    N, step,
-                    torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
-                    torch.tensor(stats["ep_steps"][-10:]).mean().item(),
-                ))
-
-            stats["ep_rewards"].append(0.0)  # reward accumulator for a new episode
-            stats["ep_steps"].append(0.0)    # reward accumulator for a new episode
-            stats["step_idx"].append(step)
-            N += 1
-
-    print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
-        N, step, torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
-        torch.tensor(stats["ep_steps"][-10:]).mean().item(),
-    ))
-    stats["agent"] = [agent.__class__.__name__ for _ in range(N+1)]
-    return stats
+# def train(agent, env, step_num=100_000):
+#
+#     stats, N = {"step_idx": [0], "ep_rewards": [0.0], "ep_steps": [0.0]}, 0
+#
+#     state, done = env.reset().clone(), False
+#     state = state.reshape(1, state.size(0), state.size(1), state.size(2))
+#     for step in range(step_num):
+#
+#         action = agent.step(state)
+#         state_, reward, done, _ = env.step(action)
+#         state_ = state_.reshape(1, state_.size(0), state_.size(1), state_.size(2))
+#         agent.learn(state, action, reward, state_, done)
+#
+#         # some envs just update the state and are not returning a new one
+#         state = state_.clone()
+#
+#         # stats
+#         stats["ep_rewards"][N] += reward
+#         stats["ep_steps"][N] += 1
+#
+#         if done:
+#             # episode done, reset env!
+#             state, done = env.reset().clone(), False
+#             state = state.reshape(1, state.size(0), state.size(1), state.size(2))
+#
+#             # some more stats
+#             if N % 10 == 0:
+#                 print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
+#                     N, step,
+#                     torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
+#                     torch.tensor(stats["ep_steps"][-10:]).mean().item(),
+#                 ))
+#
+#             stats["ep_rewards"].append(0.0)  # reward accumulator for a new episode
+#             stats["ep_steps"].append(0.0)    # reward accumulator for a new episode
+#             stats["step_idx"].append(step)
+#             N += 1
+#
+#     print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
+#         N, step, torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
+#         torch.tensor(stats["ep_steps"][-10:]).mean().item(),
+#     ))
+#     stats["agent"] = [agent.__class__.__name__ for _ in range(N+1)]
+#     return stats
 
 
 def get_options():

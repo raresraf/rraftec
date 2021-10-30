@@ -46,7 +46,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--logdir",
-        default="logdir/random_agent",
+        default="logdir/dqn_agent",
         help="Path to the folder containing different runs.",
     )
     cfg = parser.parse_args()
