@@ -113,6 +113,33 @@ class DQN:
         self._optimizer.step()
 
 
+class DoubleDQN(DQN):
+    def _update(self, states, actions, rewards, states_, done):
+        # compute the DeepQNetwork update. Carefull not to include the
+        # target network in the computational graph.
+
+        # Compute Q(s, * | θ) and Q(s', . | θ^)
+        with torch.no_grad():
+            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            q_values_ = self._target_estimator(states_)
+        q_values = self._estimator(states)
+
+        # compute Q(s, a) and TODO:
+        qsa = q_values.gather(1, actions)
+        qsa_ = q_values_.gather(1, actions_)
+
+        # compute target Q(s', a')
+        target_qsa = rewards + self._gamma * qsa_ * (1 - done.float())
+
+        # compute the loss and average it over the entire batch
+        loss = (qsa - target_qsa).pow(2).mean()
+
+        # backprop and optimize
+        self._optimizer.zero_grad()
+        loss.backward()
+        self._optimizer.step()
+
+
 class RandomAgent:
     """An example Random Agent"""
 
@@ -185,15 +212,30 @@ def main(opt):
     # agent = RandomAgent(env.action_space.n)
 
     net = get_estimator(env.action_space.n, opt.device)
-    agent = DQN(
-        net,
-        ReplayMemory(opt.device, size=1000, batch_size=32),
-        O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
-        get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
-        env.action_space.n,
-        warmup_steps=100,
-        update_steps=2,
-    )
+
+    if opt.net == 'dqn':
+        print("Using DQN net")
+        agent = DQN(
+            net,
+            ReplayMemory(opt.device, size=1000, batch_size=32),
+            O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
+            get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
+            env.action_space.n,
+            warmup_steps=100,
+            update_steps=2,
+        )
+    elif opt.net == 'ddqn':
+        print("Using Double DQN net")
+        agent = DoubleDQN(
+            net,
+            ReplayMemory(size=1000, batch_size=32),
+            O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
+            get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
+            env.action_space.n,
+            warmup_steps=100,
+            update_steps=2,
+            update_target_steps=16
+        )
 
     # train(dqn_agent, env, step_num=100000)
 
@@ -218,52 +260,6 @@ def main(opt):
         # evaluate once in a while
         if step_cnt % opt.eval_interval == 0:
             eval(agent, eval_env, step_cnt, opt)
-
-
-# def train(agent, env, step_num=100_000):
-#
-#     stats, N = {"step_idx": [0], "ep_rewards": [0.0], "ep_steps": [0.0]}, 0
-#
-#     state, done = env.reset().clone(), False
-#     state = state.reshape(1, state.size(0), state.size(1), state.size(2))
-#     for step in range(step_num):
-#
-#         action = agent.step(state)
-#         state_, reward, done, _ = env.step(action)
-#         state_ = state_.reshape(1, state_.size(0), state_.size(1), state_.size(2))
-#         agent.learn(state, action, reward, state_, done)
-#
-#         # some envs just update the state and are not returning a new one
-#         state = state_.clone()
-#
-#         # stats
-#         stats["ep_rewards"][N] += reward
-#         stats["ep_steps"][N] += 1
-#
-#         if done:
-#             # episode done, reset env!
-#             state, done = env.reset().clone(), False
-#             state = state.reshape(1, state.size(0), state.size(1), state.size(2))
-#
-#             # some more stats
-#             if N % 10 == 0:
-#                 print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
-#                     N, step,
-#                     torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
-#                     torch.tensor(stats["ep_steps"][-10:]).mean().item(),
-#                 ))
-#
-#             stats["ep_rewards"].append(0.0)  # reward accumulator for a new episode
-#             stats["ep_steps"].append(0.0)    # reward accumulator for a new episode
-#             stats["step_idx"].append(step)
-#             N += 1
-#
-#     print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
-#         N, step, torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
-#         torch.tensor(stats["ep_steps"][-10:]).mean().item(),
-#     ))
-#     stats["agent"] = [agent.__class__.__name__ for _ in range(N+1)]
-#     return stats
 
 
 def get_options():
@@ -302,6 +298,13 @@ def get_options():
         default=20,
         metavar="N",
         help="Number of evaluation episodes to average over",
+    )
+    parser.add_argument(
+        "--net",
+        type=str,
+        default='dqn',
+        metavar="NET",
+        help="Type of DQN",
     )
     return parser.parse_args()
 
@@ -385,14 +388,14 @@ def get_epsilon_schedule(start=1.0, end=0.1, steps=500):
 def get_estimator(action_num, device, input_ch=4, lin_size=32):
     return nn.Sequential(
         # ByteToFloat(),
-        nn.Conv2d(input_ch, 32, kernel_size=3),
+        nn.Conv2d(input_ch, 16, kernel_size=3),
         nn.ReLU(inplace=True),
-        nn.Conv2d(32, 32, kernel_size=2),
-        nn.ReLU(inplace=True),
-        nn.Conv2d(32, 32, kernel_size=2),
+        nn.Conv2d(16, 4, kernel_size=3),
         nn.ReLU(inplace=True),
         View(),
-        nn.Linear(204800, lin_size),
+        nn.Linear(4 * 80 * 80, 80 * 80),
+        nn.ReLU(inplace=True),
+        nn.Linear(80 * 80, lin_size),
         nn.ReLU(inplace=True),
         nn.Linear(lin_size, action_num),
     ).to(device)
