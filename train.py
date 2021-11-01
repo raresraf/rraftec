@@ -21,10 +21,10 @@ class DQN:
             optimizer,
             epsilon_schedule,
             action_num,
-            gamma=0.92,
-            update_steps=4,
+            gamma=0.90,
+            update_steps=1,
             update_target_steps=10,
-            warmup_steps=100,
+            warmup_steps=10000,
     ):
         self._estimator = estimator
         self._target_estimator = deepcopy(estimator)
@@ -219,22 +219,22 @@ def main(opt):
             net,
             ReplayMemory(opt.device, size=1000, batch_size=32),
             O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
-            get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
+            get_epsilon_schedule(start=1.0, end=0.1, steps=100000),
             env.action_space.n,
-            warmup_steps=100,
-            update_steps=2,
+            warmup_steps=10000,
+            update_steps=1,
         )
     elif opt.net == 'ddqn':
         print("Using Double DQN net")
         agent = DoubleDQN(
             net,
-            ReplayMemory(size=1000, batch_size=32),
+            ReplayMemory(opt.device, size=1000, batch_size=32),
             O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
-            get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
+            get_epsilon_schedule(start=1.0, end=0.1, steps=100000),
             env.action_space.n,
             warmup_steps=100,
-            update_steps=2,
-            update_target_steps=16
+            update_steps=1,
+            update_target_steps=4
         )
 
     # train(dqn_agent, env, step_num=100000)
@@ -388,14 +388,14 @@ def get_epsilon_schedule(start=1.0, end=0.1, steps=500):
 def get_estimator(action_num, device, input_ch=4, lin_size=32):
     return nn.Sequential(
         # ByteToFloat(),
-        nn.Conv2d(input_ch, 16, kernel_size=3),
+        nn.Conv2d(input_ch, 8, kernel_size=3),
         nn.ReLU(inplace=True),
-        nn.Conv2d(16, 4, kernel_size=3),
+        nn.Conv2d(8, 8, kernel_size=3),
         nn.ReLU(inplace=True),
         View(),
-        nn.Linear(4 * 80 * 80, 80 * 80),
+        nn.Linear(8 * 80 * 80, 8 * 80),
         nn.ReLU(inplace=True),
-        nn.Linear(80 * 80, lin_size),
+        nn.Linear(8 * 80, lin_size),
         nn.ReLU(inplace=True),
         nn.Linear(lin_size, action_num),
     ).to(device)
